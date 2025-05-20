@@ -28,7 +28,12 @@ public class AudioRecorder: NSObject, AVAudioRecorderDelegate{
             settings[AVLinearPCMIsFloatKey] = recordingSettings.linearPCMIsFloat
         }
 
-        let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetooth]
+        let options: AVAudioSession.CategoryOptions = [
+            .defaultToSpeaker,
+            .allowBluetooth,
+            .mixWithOthers
+        ]
+
         if (recordingSettings.path == nil) {
             let documentDirectory = getDocumentDirectory(result)
             let date = Date()
