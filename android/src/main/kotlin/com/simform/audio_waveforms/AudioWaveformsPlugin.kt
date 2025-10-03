@@ -262,6 +262,7 @@ class AudioWaveformsPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     result,
                     recorder,
                     recorderSettings,
+                    applicationContext
                 )
             } catch (e: IOException) {
                 Log.e(Constants.LOG_TAG, "Failed to create file")
@@ -271,6 +272,7 @@ class AudioWaveformsPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 result,
                 recorder,
                 recorderSettings,
+                applicationContext
             )
         }
     }

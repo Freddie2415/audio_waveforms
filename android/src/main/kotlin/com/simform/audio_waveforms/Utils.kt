@@ -19,6 +19,7 @@ object Constants {
     const val outputFormat = "outputFormat"
     const val sampleRate = "sampleRate"
     const val bitRate = "bitRate"
+    const val audioDeviceId = "audioDeviceId"
     const val fileNameFormat = "dd-MM-yy-hh-mm-ss"
 
 

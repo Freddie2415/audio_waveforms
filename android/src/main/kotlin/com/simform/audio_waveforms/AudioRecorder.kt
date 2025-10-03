@@ -2,7 +2,10 @@ package com.simform.audio_waveforms
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.media.MediaMetadataRetriever.METADATA_KEY_DURATION
 import android.media.MediaRecorder
@@ -39,7 +42,8 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
     fun initRecorder(
         result: MethodChannel.Result,
         recorder: MediaRecorder?,
-        recorderSettings: RecorderSettings
+        recorderSettings: RecorderSettings,
+        context: Context
     ) {
         recorder?.apply {
             setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -49,12 +53,19 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
             if (recorderSettings.bitRate != null) {
                 setAudioEncodingBitRate(recorderSettings.bitRate)
             }
+
+            // Set preferred audio device if specified (Android 6.0+ only)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && recorderSettings.audioDeviceId != null) {
+                setPreferredAudioDevice(context, recorderSettings.audioDeviceId)
+            }
+
             setOutputFile(recorderSettings.path)
             try {
                 recorder.prepare()
                 result.success(true)
             } catch (e: IOException) {
-                Log.e(LOG_TAG, "Failed to stop initialize recorder")
+                Log.e(LOG_TAG, "Failed to initialize recorder: ${e.message}")
+                result.error(LOG_TAG, "Failed to initialize recorder", e.message)
             }
         }
     }
@@ -160,6 +171,36 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
             }
         } else {
             result.success(true)
+        }
+    }
+
+    /**
+     * Sets the preferred audio input device for the MediaRecorder.
+     * This method is only available on Android 6.0 (API 23) and above.
+     *
+     * @param context Application context to access AudioManager
+     * @param deviceId The ID of the audio input device to use
+     */
+    @RequiresApi(Build.VERSION_CODES.M)
+    private fun MediaRecorder.setPreferredAudioDevice(context: Context, deviceId: Int) {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+
+            val selectedDevice = devices.find { it.id == deviceId }
+
+            if (selectedDevice != null) {
+                val success = setPreferredDevice(selectedDevice)
+                if (success) {
+                    Log.d(LOG_TAG, "Successfully set preferred audio device: ${selectedDevice.productName} (ID: $deviceId)")
+                } else {
+                    Log.w(LOG_TAG, "Failed to set preferred audio device: ${selectedDevice.productName} (ID: $deviceId)")
+                }
+            } else {
+                Log.w(LOG_TAG, "Audio device with ID $deviceId not found. Available devices: ${devices.map { "${it.productName} (ID: ${it.id})" }}")
+            }
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Error setting preferred audio device: ${e.message}", e)
         }
     }
 
