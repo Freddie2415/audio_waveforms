@@ -46,22 +46,27 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
         context: Context
     ) {
         recorder?.apply {
-            setAudioSource(MediaRecorder.AudioSource.MIC)
+            val audioSource = getAudioSource(recorderSettings.audioSource)
+            Log.d(LOG_TAG, "Setting audio source: $audioSource (index: ${recorderSettings.audioSource})")
+            setAudioSource(audioSource)
             setOutputFormat(getOutputFormat(recorderSettings.outputFormat))
             setAudioEncoder(getEncoder(recorderSettings.encoder))
             setAudioSamplingRate(recorderSettings.sampleRate)
-            if (recorderSettings.bitRate != null) {
-                setAudioEncodingBitRate(recorderSettings.bitRate)
-            }
+            setAudioChannels(1) // Mono for standard recording
 
-            // Set preferred audio device if specified (Android 6.0+ only)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && recorderSettings.audioDeviceId != null) {
+            // Set high quality bitrate - use provided value or default to 256kbps for music quality
+            val bitRate = recorderSettings.bitRate ?: 256000
+            Log.d(LOG_TAG, "Setting bitRate: $bitRate")
+            setAudioEncodingBitRate(bitRate)
+
+            // Android P+ only
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && recorderSettings.audioDeviceId != null) {
                 setPreferredAudioDevice(context, recorderSettings.audioDeviceId)
             }
 
             setOutputFile(recorderSettings.path)
             try {
-                recorder.prepare()
+                prepare()
                 result.success(true)
             } catch (e: IOException) {
                 Log.e(LOG_TAG, "Failed to initialize recorder: ${e.message}")
@@ -181,23 +186,22 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
      * @param context Application context to access AudioManager
      * @param deviceId The ID of the audio input device to use
      */
-    @RequiresApi(Build.VERSION_CODES.M)
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun MediaRecorder.setPreferredAudioDevice(context: Context, deviceId: Int) {
         try {
             val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
-
             val selectedDevice = devices.find { it.id == deviceId }
 
             if (selectedDevice != null) {
                 val success = setPreferredDevice(selectedDevice)
                 if (success) {
-                    Log.d(LOG_TAG, "Successfully set preferred audio device: ${selectedDevice.productName} (ID: $deviceId)")
+                    Log.d(LOG_TAG, "Preferred audio device set: ${selectedDevice.productName} (ID: $deviceId)")
                 } else {
-                    Log.w(LOG_TAG, "Failed to set preferred audio device: ${selectedDevice.productName} (ID: $deviceId)")
+                    Log.w(LOG_TAG, "Failed to set preferred device: ${selectedDevice.productName} (ID: $deviceId)")
                 }
             } else {
-                Log.w(LOG_TAG, "Audio device with ID $deviceId not found. Available devices: ${devices.map { "${it.productName} (ID: ${it.id})" }}")
+                Log.w(LOG_TAG, "Device ID $deviceId not found. Available: ${devices.map { "${it.productName} (ID: ${it.id})" }}")
             }
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error setting preferred audio device: ${e.message}", e)
@@ -255,6 +259,28 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
 
             Constants.aac_adts -> return MediaRecorder.OutputFormat.AAC_ADTS
             else -> return MediaRecorder.OutputFormat.MPEG_4
+        }
+    }
+
+    private fun getAudioSource(sourceIndex: Int?): Int {
+        return when (sourceIndex) {
+            0 -> MediaRecorder.AudioSource.MIC
+            1 -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+            2 -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            3 -> MediaRecorder.AudioSource.CAMCORDER
+            4 -> {
+                // UNPROCESSED requires Android Q (API 29)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    MediaRecorder.AudioSource.UNPROCESSED
+                } else {
+                    Log.w(LOG_TAG, "UNPROCESSED source requires Android Q+, falling back to MIC")
+                    MediaRecorder.AudioSource.MIC
+                }
+            }
+            else -> {
+                // Default to MIC if null or unknown value
+                MediaRecorder.AudioSource.MIC
+            }
         }
     }
 }

@@ -58,5 +58,6 @@ class RecorderSettings {
         Constants.sampleRate: sampleRate,
         Constants.bitRate: bitRate,
         Constants.audioDeviceId: androidEncoderSettings.audioDeviceId,
+        Constants.audioSource: androidEncoderSettings.audioSource?.index,
       };
 }

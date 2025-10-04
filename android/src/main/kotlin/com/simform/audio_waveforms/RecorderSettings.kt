@@ -6,7 +6,8 @@ data class RecorderSettings(
     val outputFormat: Int = 0,
     val sampleRate: Int = 44100,
     val bitRate: Int?,
-    val audioDeviceId: Int? = null
+    val audioDeviceId: Int? = null,
+    val audioSource: Int? = null
 ) {
     companion object {
         fun fromJson(json: Map<String, Any?>): RecorderSettings {
@@ -16,7 +17,8 @@ data class RecorderSettings(
                 outputFormat = (json[Constants.outputFormat] as Int?) ?: 0,
                 sampleRate = (json[Constants.sampleRate] as Int?) ?: 44100,
                 bitRate = json[Constants.bitRate] as Int?,
-                audioDeviceId = json[Constants.audioDeviceId] as Int?
+                audioDeviceId = json[Constants.audioDeviceId] as Int?,
+                audioSource = json[Constants.audioSource] as Int?
             )
         }
     }

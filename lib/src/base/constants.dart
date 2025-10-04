@@ -16,6 +16,7 @@ class Constants {
   static const String sampleRate = 'sampleRate';
   static const String bitRate = 'bitRate';
   static const String audioDeviceId = 'audioDeviceId';
+  static const String audioSource = 'audioSource';
   static const String readAudioFile = 'readAudioFile';
   static const String convertToBytes = 'convertToBytes';
   static const String preparePlayer = "preparePlayer";

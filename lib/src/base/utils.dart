@@ -15,6 +15,30 @@ extension IntExtension on int {
 /// State of recorder
 enum RecorderState { initialized, recording, paused, stopped }
 
+/// Android audio sources.
+///
+/// Defines the audio source to be used for recording.
+///
+/// Check [MediaRecorder.AudioSource](https://developer.android.com/reference/android/media/MediaRecorder.AudioSource)
+/// for more info.
+enum AndroidAudioSource {
+  /// Default microphone audio source
+  mic,
+
+  /// Microphone audio source tuned for voice recognition with noise suppression
+  voiceRecognition,
+
+  /// Microphone audio source tuned for voice communications (calls) with aggressive noise/echo cancellation
+  voiceCommunication,
+
+  /// Microphone audio source tuned for video recording
+  camcorder,
+
+  /// Unprocessed audio source without any signal processing (Android 10+)
+  /// Falls back to MIC on older versions
+  unprocessed,
+}
+
 /// Android encoders.
 ///
 /// Android and IOS are have been separated to better support
