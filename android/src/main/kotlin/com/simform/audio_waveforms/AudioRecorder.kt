@@ -16,6 +16,8 @@ import androidx.core.app.ActivityCompat
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.log10
 
 private const val LOG_TAG = "AudioWaveforms"
@@ -30,6 +32,7 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
     private var isBluetoothScoEnabled = false
     private var originalAudioMode = AudioManager.MODE_NORMAL
     private var scoReceiver: android.content.BroadcastReceiver? = null
+    private var communicationDevice: AudioDeviceInfo? = null
 
     fun getDecibel(result: MethodChannel.Result, recorder: MediaRecorder?) {
         if (useLegacyNormalization) {
@@ -51,16 +54,44 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
         context: Context
     ) {
         recorder?.apply {
-            val audioSource = getAudioSource(recorderSettings.audioSource)
+            // Check if target device is Bluetooth
+            val isBluetoothDevice = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && recorderSettings.audioDeviceId != null) {
+                isBluetoothInputDevice(context, recorderSettings.audioDeviceId)
+            } else {
+                false
+            }
+
+            // For Bluetooth, use VOICE_COMMUNICATION source for better compatibility
+            val audioSource = if (isBluetoothDevice) {
+                Log.d(LOG_TAG, "Bluetooth device detected, using VOICE_COMMUNICATION source")
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            } else {
+                getAudioSource(recorderSettings.audioSource)
+            }
             Log.d(LOG_TAG, "Setting audio source: $audioSource (index: ${recorderSettings.audioSource})")
             setAudioSource(audioSource)
+
             setOutputFormat(getOutputFormat(recorderSettings.outputFormat))
             setAudioEncoder(getEncoder(recorderSettings.encoder))
-            setAudioSamplingRate(recorderSettings.sampleRate)
+
+            // For Bluetooth SCO, use 16kHz or 8kHz sample rate for better compatibility
+            val sampleRate = if (isBluetoothDevice && recorderSettings.sampleRate > 16000) {
+                Log.d(LOG_TAG, "Bluetooth device detected, adjusting sample rate from ${recorderSettings.sampleRate} to 16000 Hz")
+                16000
+            } else {
+                recorderSettings.sampleRate
+            }
+            setAudioSamplingRate(sampleRate)
             setAudioChannels(1) // Mono for standard recording
 
-            // Set high quality bitrate - use provided value or default to 256kbps for music quality
-            val bitRate = recorderSettings.bitRate ?: 256000
+            // For Bluetooth, use lower bitrate (64kbps is sufficient for voice quality)
+            val bitRate = if (isBluetoothDevice) {
+                val btBitRate = 64000
+                Log.d(LOG_TAG, "Bluetooth device detected, using bitRate: $btBitRate")
+                btBitRate
+            } else {
+                recorderSettings.bitRate ?: 256000
+            }
             Log.d(LOG_TAG, "Setting bitRate: $bitRate")
             setAudioEncodingBitRate(bitRate)
 
@@ -114,23 +145,36 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
 
     private fun cleanupBluetoothAudio(context: Context) {
         try {
-            // Unregister SCO receiver if registered
-            scoReceiver?.let {
-                try {
-                    context.unregisterReceiver(it)
-                    Log.d(LOG_TAG, "SCO receiver unregistered")
-                } catch (e: IllegalArgumentException) {
-                    // Receiver not registered, ignore
-                }
-                scoReceiver = null
-            }
-
             val audioManager = context.getServiceOrNull<AudioManager>(Context.AUDIO_SERVICE) ?: return
 
-            if (audioManager.isBluetoothScoOn) {
-                audioManager.stopBluetoothSco()
-                audioManager.isBluetoothScoOn = false
-                Log.d(LOG_TAG, "Bluetooth SCO stopped")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // Android S+: Clear communication device
+                communicationDevice?.let {
+                    try {
+                        audioManager.clearCommunicationDevice()
+                        Log.d(LOG_TAG, "Communication device cleared")
+                    } catch (e: Exception) {
+                        Log.e(LOG_TAG, "Error clearing communication device: ${e.message}", e)
+                    }
+                    communicationDevice = null
+                }
+            } else {
+                // Pre-Android S: Cleanup SCO
+                scoReceiver?.let {
+                    try {
+                        context.unregisterReceiver(it)
+                        Log.d(LOG_TAG, "SCO receiver unregistered")
+                    } catch (e: IllegalArgumentException) {
+                        // Receiver not registered, ignore
+                    }
+                    scoReceiver = null
+                }
+
+                if (audioManager.isBluetoothScoOn) {
+                    audioManager.stopBluetoothSco()
+                    audioManager.isBluetoothScoOn = false
+                    Log.d(LOG_TAG, "Bluetooth SCO stopped")
+                }
             }
 
             audioManager.mode = originalAudioMode
@@ -241,20 +285,87 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
     }
 
     /**
-     * Starts Bluetooth SCO for the given audio device asynchronously.
+     * Checks if the given device ID corresponds to a Bluetooth input device.
+     */
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun isBluetoothInputDevice(context: Context, deviceId: Int): Boolean {
+        try {
+            val audioManager = context.getServiceOrNull<AudioManager>(Context.AUDIO_SERVICE) ?: return false
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+
+            // First try to find by ID
+            var device = devices.find { it.id == deviceId && it.isSource }
+
+            // Fallback: find any Bluetooth input device by type
+            if (device == null) {
+                device = devices.find { d ->
+                    d.isSource && (
+                        d.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && d.type == TYPE_BLE_HEADSET)
+                    )
+                }
+            }
+
+            return device != null && (
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && device.type == TYPE_BLE_HEADSET)
+            )
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Error checking if device is Bluetooth: ${e.message}")
+            return false
+        }
+    }
+
+    /**
+     * Sets up Bluetooth audio routing for the given device.
+     * For Android S+: uses setCommunicationDevice (modern API)
+     * For older versions: uses Bluetooth SCO (legacy API)
      * This must be called BEFORE prepare().
      */
     @RequiresApi(Build.VERSION_CODES.P)
-    private fun setupBluetoothSco(context: Context, audioManager: AudioManager) {
+    private fun setupBluetoothAudio(context: Context, audioManager: AudioManager, device: AudioDeviceInfo) {
         // Save original audio mode
         originalAudioMode = audioManager.mode
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Android S+ (API 31+): Use modern setCommunicationDevice API
+            try {
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                Log.d(LOG_TAG, "Audio mode set to MODE_IN_COMMUNICATION (original: $originalAudioMode)")
+
+                val success = audioManager.setCommunicationDevice(device)
+                if (success) {
+                    communicationDevice = device
+                    isBluetoothScoEnabled = true
+                    Log.d(LOG_TAG, "Communication device set successfully: ${device.productName} (ID: ${device.id})")
+                } else {
+                    Log.e(LOG_TAG, "Failed to set communication device: ${device.productName}")
+                    audioManager.mode = originalAudioMode
+                }
+            } catch (e: Exception) {
+                Log.e(LOG_TAG, "Error setting communication device: ${e.message}", e)
+                audioManager.mode = originalAudioMode
+            }
+        } else {
+            // Pre-Android S: Use legacy Bluetooth SCO
+            setupBluetoothSco(context, audioManager)
+        }
+    }
+
+    /**
+     * Legacy Bluetooth SCO setup for Android versions before S.
+     * Starts Bluetooth SCO and waits for connection with timeout.
+     */
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun setupBluetoothSco(context: Context, audioManager: AudioManager) {
         // Set audio mode BEFORE starting SCO
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
         Log.d(LOG_TAG, "Audio mode set to MODE_IN_COMMUNICATION (original: $originalAudioMode)")
 
-        // Start Bluetooth SCO (non-blocking)
+        // Start Bluetooth SCO
         if (!audioManager.isBluetoothScoOn) {
+            val scoConnectionLatch = CountDownLatch(1)
+
             // Register receiver to monitor SCO state
             scoReceiver = object : android.content.BroadcastReceiver() {
                 override fun onReceive(ctx: Context?, intent: android.content.Intent?) {
@@ -262,12 +373,14 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
                     when (state) {
                         AudioManager.SCO_AUDIO_STATE_CONNECTED -> {
                             Log.d(LOG_TAG, "Bluetooth SCO connected")
+                            scoConnectionLatch.countDown()
                         }
                         AudioManager.SCO_AUDIO_STATE_DISCONNECTED -> {
                             Log.d(LOG_TAG, "Bluetooth SCO disconnected")
                         }
                         AudioManager.SCO_AUDIO_STATE_ERROR -> {
                             Log.e(LOG_TAG, "Bluetooth SCO error")
+                            scoConnectionLatch.countDown()
                         }
                     }
                 }
@@ -278,8 +391,23 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
 
             audioManager.startBluetoothSco()
             audioManager.isBluetoothScoOn = true
-            isBluetoothScoEnabled = true
-            Log.d(LOG_TAG, "Bluetooth SCO started (async)")
+            Log.d(LOG_TAG, "Bluetooth SCO start requested, waiting for connection...")
+
+            // Wait for SCO connection with 3 second timeout
+            try {
+                val connected = scoConnectionLatch.await(3, TimeUnit.SECONDS)
+                if (connected) {
+                    Log.d(LOG_TAG, "Bluetooth SCO connection established")
+                    isBluetoothScoEnabled = true
+                } else {
+                    Log.w(LOG_TAG, "Bluetooth SCO connection timeout (3s), proceeding anyway")
+                    // Still mark as enabled so cleanup will run
+                    isBluetoothScoEnabled = true
+                }
+            } catch (e: InterruptedException) {
+                Log.e(LOG_TAG, "Interrupted while waiting for SCO connection: ${e.message}")
+                isBluetoothScoEnabled = true
+            }
         }
     }
 
@@ -300,7 +428,7 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
             }
 
             val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
-            val selectedDevice = devices.find { it.id == deviceId }
+            var selectedDevice = devices.find { it.id == deviceId }
 
             if (selectedDevice != null) {
                 // Check if this is an input device
@@ -320,7 +448,18 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
 
                 if (isBluetooth) {
                     Log.d(LOG_TAG, "Detected Bluetooth input device: ${selectedDevice.productName} (Type: ${selectedDevice.type})")
-                    setupBluetoothSco(context, audioManager)
+
+                    // Check BLUETOOTH_CONNECT permission for Android S+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val hasPermission = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                        if (!hasPermission) {
+                            Log.e(LOG_TAG, "BLUETOOTH_CONNECT permission not granted. Cannot use Bluetooth device for recording.")
+                            Log.d(LOG_TAG, "Falling back to default microphone")
+                            return
+                        }
+                    }
+
+                    setupBluetoothAudio(context, audioManager, selectedDevice)
                 }
 
                 val success = recorder.setPreferredDevice(selectedDevice)
@@ -335,11 +474,47 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
                     }
                 }
             } else {
-                Log.w(LOG_TAG, "Device ID $deviceId not found. Available input devices:")
-                devices.filter { it.isSource }.forEach {
-                    Log.w(LOG_TAG, "  - ${it.productName} (ID: ${it.id}, Type: ${it.type})")
+                Log.w(LOG_TAG, "Device ID $deviceId not found. Attempting fallback to find device by type...")
+
+                // Fallback: Try to find a Bluetooth input device by type
+                selectedDevice = devices.find { device ->
+                    device.isSource && (
+                        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && device.type == TYPE_BLE_HEADSET)
+                    )
                 }
-                Log.d(LOG_TAG, "Falling back to default microphone")
+
+                if (selectedDevice != null) {
+                    Log.d(LOG_TAG, "Fallback successful: Found Bluetooth device ${selectedDevice.productName} (ID: ${selectedDevice.id}, Type: ${selectedDevice.type})")
+
+                    // Check BLUETOOTH_CONNECT permission for Android S+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val hasPermission = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                        if (!hasPermission) {
+                            Log.e(LOG_TAG, "BLUETOOTH_CONNECT permission not granted. Cannot use Bluetooth device for recording.")
+                            Log.d(LOG_TAG, "Falling back to default microphone")
+                            return
+                        }
+                    }
+
+                    // Setup Bluetooth audio routing
+                    setupBluetoothAudio(context, audioManager, selectedDevice)
+
+                    val success = recorder.setPreferredDevice(selectedDevice)
+                    if (success) {
+                        Log.d(LOG_TAG, "Preferred audio device set via fallback: ${selectedDevice.productName} (ID: ${selectedDevice.id}, Type: ${selectedDevice.type})")
+                    } else {
+                        Log.w(LOG_TAG, "Failed to set preferred device via fallback: ${selectedDevice.productName}")
+                        cleanupBluetoothAudio(context)
+                        Log.d(LOG_TAG, "Falling back to default microphone")
+                    }
+                } else {
+                    Log.w(LOG_TAG, "No suitable Bluetooth input device found. Available input devices:")
+                    devices.filter { it.isSource }.forEach {
+                        Log.w(LOG_TAG, "  - ${it.productName} (ID: ${it.id}, Type: ${it.type})")
+                    }
+                    Log.d(LOG_TAG, "Falling back to default microphone")
+                }
             }
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error setting preferred audio device: ${e.message}", e)
