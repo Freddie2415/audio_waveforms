@@ -245,6 +245,15 @@ class AudioWaveformsPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         result: Result,
         recorderSettings: RecorderSettings
     ) {
+        // Check BLUETOOTH_CONNECT permission if deviceId is set on Android 12+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && recorderSettings.audioDeviceId != null) {
+            if (activity?.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                Log.w(Constants.LOG_TAG, "BLUETOOTH_CONNECT permission not granted for audio device selection")
+                // Note: Application should request this permission via Flutter before calling initRecorder
+            }
+        }
+
         try {
             recorder = MediaRecorder()
         } catch (e: Exception) {
