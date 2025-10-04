@@ -73,7 +73,8 @@ class AudioWaveformsPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 audioRecorder.stopRecording(
                     result,
                     recorder,
-                    recorderSettings.path!!
+                    recorderSettings.path!!,
+                    applicationContext
                 )
                 recorder = null
             }

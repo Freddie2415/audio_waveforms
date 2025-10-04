@@ -25,6 +25,8 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
     private var permissions = arrayOf(Manifest.permission.RECORD_AUDIO)
     private var useLegacyNormalization = false
     private var successCallback: RequestPermissionsSuccessCallback? = null
+    private var isBluetoothScoEnabled = false
+    private var originalAudioMode = AudioManager.MODE_NORMAL
 
     fun getDecibel(result: MethodChannel.Result, recorder: MediaRecorder?) {
         if (useLegacyNormalization) {
@@ -59,14 +61,15 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
             Log.d(LOG_TAG, "Setting bitRate: $bitRate")
             setAudioEncodingBitRate(bitRate)
 
-            // Android P+ only
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && recorderSettings.audioDeviceId != null) {
-                setPreferredAudioDevice(context, recorderSettings.audioDeviceId)
-            }
-
             setOutputFile(recorderSettings.path)
             try {
                 prepare()
+
+                // Android P+ only - must be called AFTER prepare()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && recorderSettings.audioDeviceId != null) {
+                    setPreferredAudioDevice(context, recorderSettings.audioDeviceId)
+                }
+
                 result.success(true)
             } catch (e: IOException) {
                 Log.e(LOG_TAG, "Failed to initialize recorder: ${e.message}")
@@ -75,7 +78,7 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
         }
     }
 
-    fun stopRecording(result: MethodChannel.Result, recorder: MediaRecorder?, path: String) {
+    fun stopRecording(result: MethodChannel.Result, recorder: MediaRecorder?, path: String, context: Context?) {
         try {
             val hashMap: HashMap<String, Any?> = HashMap()
             try {
@@ -96,9 +99,30 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
                 release()
             }
 
+            // Clean up Bluetooth SCO if it was enabled
+            if (isBluetoothScoEnabled && context != null) {
+                cleanupBluetoothAudio(context)
+            }
+
             result.success(hashMap)
         } catch (e: IllegalStateException) {
             Log.e(LOG_TAG, "Failed to stop recording")
+        }
+    }
+
+    private fun cleanupBluetoothAudio(context: Context) {
+        try {
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            if (audioManager.isBluetoothScoOn) {
+                audioManager.stopBluetoothSco()
+                audioManager.isBluetoothScoOn = false
+                Log.d(LOG_TAG, "Bluetooth SCO stopped")
+            }
+            audioManager.mode = originalAudioMode
+            Log.d(LOG_TAG, "Audio mode restored to $originalAudioMode")
+            isBluetoothScoEnabled = false
+        } catch (e: Exception) {
+            Log.e(LOG_TAG, "Error cleaning up Bluetooth audio: ${e.message}", e)
         }
     }
 
@@ -194,17 +218,51 @@ class AudioRecorder : PluginRegistry.RequestPermissionsResultListener {
             val selectedDevice = devices.find { it.id == deviceId }
 
             if (selectedDevice != null) {
+                // Check if this is a Bluetooth device
+                val isBluetooth = selectedDevice.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                  selectedDevice.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+
+                if (isBluetooth) {
+                    Log.d(LOG_TAG, "Detected Bluetooth device: ${selectedDevice.productName}")
+
+                    // Save original audio mode
+                    originalAudioMode = audioManager.mode
+
+                    // Enable Bluetooth SCO for Bluetooth microphones
+                    if (!audioManager.isBluetoothScoOn) {
+                        audioManager.startBluetoothSco()
+                        audioManager.isBluetoothScoOn = true
+                        isBluetoothScoEnabled = true
+                        Log.d(LOG_TAG, "Bluetooth SCO enabled")
+                    }
+
+                    // Set appropriate audio mode for Bluetooth
+                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                    Log.d(LOG_TAG, "Audio mode set to MODE_IN_COMMUNICATION for Bluetooth (original mode: $originalAudioMode)")
+                }
+
                 val success = setPreferredDevice(selectedDevice)
                 if (success) {
-                    Log.d(LOG_TAG, "Preferred audio device set: ${selectedDevice.productName} (ID: $deviceId)")
+                    Log.d(LOG_TAG, "Preferred audio device set: ${selectedDevice.productName} (ID: $deviceId, Type: ${selectedDevice.type})")
                 } else {
-                    Log.w(LOG_TAG, "Failed to set preferred device: ${selectedDevice.productName} (ID: $deviceId)")
+                    Log.w(LOG_TAG, "Failed to set preferred device: ${selectedDevice.productName} (ID: $deviceId, Type: ${selectedDevice.type})")
+                    // Fallback: cleanup Bluetooth if it was enabled
+                    if (isBluetooth) {
+                        cleanupBluetoothAudio(context)
+                        Log.d(LOG_TAG, "Falling back to default microphone")
+                    }
                 }
             } else {
-                Log.w(LOG_TAG, "Device ID $deviceId not found. Available: ${devices.map { "${it.productName} (ID: ${it.id})" }}")
+                Log.w(LOG_TAG, "Device ID $deviceId not found. Available: ${devices.map { "${it.productName} (ID: ${it.id}, Type: ${it.type})" }}")
+                Log.d(LOG_TAG, "Falling back to default microphone")
             }
         } catch (e: Exception) {
             Log.e(LOG_TAG, "Error setting preferred audio device: ${e.message}", e)
+            // Fallback: cleanup any Bluetooth setup and use default
+            if (isBluetoothScoEnabled) {
+                cleanupBluetoothAudio(context)
+            }
+            Log.d(LOG_TAG, "Error occurred, falling back to default microphone")
         }
     }
 
