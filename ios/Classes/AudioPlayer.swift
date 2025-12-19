@@ -31,16 +31,37 @@ class AudioPlayer: NSObject, AVAudioPlayerDelegate {
             do {
                 stopPlayer()
                 player = nil
-                player = try AVAudioPlayer(contentsOf: audioUrl!)
+
+                // IMPORTANT: Ensure audio session is configured for Bluetooth BEFORE creating AVAudioPlayer
+                // This fixes the issue where playback doesn't route to Bluetooth speakers
                 do {
                     if overrideAudioSession {
-                        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+                        // Override: set full audio session category
+                        let options: AVAudioSession.CategoryOptions = [
+                            .allowBluetooth,
+                            .allowBluetoothA2DP
+                        ]
+                        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: options)
                         try AVAudioSession.sharedInstance().setActive(true)
+                    } else {
+                        // Don't override category, but ensure Bluetooth options are set
+                        // This is safe and doesn't conflict with other plugins
+                        let currentCategory = AVAudioSession.sharedInstance().category
+                        let currentMode = AVAudioSession.sharedInstance().mode
+                        var options: AVAudioSession.CategoryOptions = AVAudioSession.sharedInstance().categoryOptions
+
+                        // Add Bluetooth options if not already present
+                        options.insert(.allowBluetooth)
+                        options.insert(.allowBluetoothA2DP)
+
+                        try AVAudioSession.sharedInstance().setCategory(currentCategory, mode: currentMode, options: options)
                     }
                 } catch {
                     result(FlutterError(code: Constants.audioWaveforms, message: "Couldn't set audio session.", details: error.localizedDescription))
-
+                    return
                 }
+
+                player = try AVAudioPlayer(contentsOf: audioUrl!)
                 
             } catch {
                 result(FlutterError(code: Constants.audioWaveforms, message: "Failed to prepare player", details: error.localizedDescription))
