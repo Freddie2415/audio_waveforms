@@ -151,7 +151,8 @@ class PlayerController extends ChangeNotifier {
       )
           .then(
         (value) {
-          waveformExtraction.waveformData
+          // Access _waveformData directly since getter returns a copy
+          waveformExtraction._waveformData
             ..clear()
             ..addAll(value);
           notifyListeners();

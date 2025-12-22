@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import com.google.android.exoplayer2.C
 import com.google.android.exoplayer2.ExoPlayer
 import com.google.android.exoplayer2.MediaItem
 import com.google.android.exoplayer2.PlaybackException
@@ -120,11 +121,11 @@ class AudioPlayer(
     fun getDuration(result: MethodChannel.Result, durationType: DurationType) {
         try {
             if (durationType == DurationType.Current) {
-                val duration = player?.currentPosition
-                result.success(duration)
+                val duration = player?.currentPosition ?: 0L
+                result.success(if (duration == C.TIME_UNSET) 0L else duration)
             } else {
-                val duration = player?.duration
-                result.success(duration)
+                val duration = player?.duration ?: 0L
+                result.success(if (duration == C.TIME_UNSET) 0L else duration)
             }
         } catch (e: Exception) {
             result.error(Constants.LOG_TAG, "Can not get duration", e.toString())
@@ -228,9 +229,9 @@ class AudioPlayer(
     }
 
     private fun sendCurrentDuration() {
-        val currentPosition = player?.currentPosition ?: 0
+        val currentPosition = player?.currentPosition ?: 0L
         val args: MutableMap<String, Any?> = HashMap()
-        args[Constants.current] = currentPosition
+        args[Constants.current] = if (currentPosition == C.TIME_UNSET) 0L else currentPosition
         args[Constants.playerKey] = key
         methodChannel.invokeMethod(Constants.onCurrentDuration, args)
     }

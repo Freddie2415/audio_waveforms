@@ -30,6 +30,7 @@ class WaveformExtractor(
 
     private val finishCount = CountDownLatch(1)
     private var inputEof = false
+    private var isStopped = false
     private var sampleRate = 0
     private var channels = 1
     private var pcmEncodingBit = 16
@@ -231,10 +232,28 @@ class WaveformExtractor(
         }
     }
 
+    @Synchronized
     fun stop() {
-        decoder?.stop()
-        decoder?.release()
-        extractor?.release()
+        if (isStopped) return
+        isStopped = true
+
+        try {
+            decoder?.stop()
+        } catch (e: IllegalStateException) {
+            // MediaCodec was not in a valid state to stop (already stopped or not started)
+        }
+        try {
+            decoder?.release()
+        } catch (e: Exception) {
+            // Ignore release errors
+        }
+        try {
+            extractor?.release()
+        } catch (e: Exception) {
+            // Ignore release errors
+        }
+        decoder = null
+        extractor = null
         finishCount.countDown()
     }
 }
