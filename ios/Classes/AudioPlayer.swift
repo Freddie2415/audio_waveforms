@@ -35,27 +35,26 @@ class AudioPlayer: NSObject, AVAudioPlayerDelegate {
                 // IMPORTANT: Ensure audio session is configured for Bluetooth BEFORE creating AVAudioPlayer
                 // This fixes the issue where playback doesn't route to Bluetooth speakers
                 do {
+                    let session = AVAudioSession.sharedInstance()
                     if overrideAudioSession {
-                        // Override: set full audio session category
-                        let options: AVAudioSession.CategoryOptions = [
-                            .allowBluetooth,
-                            .allowBluetoothA2DP
-                        ]
-                        try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: options)
-                        try AVAudioSession.sharedInstance().setActive(true)
-                    } else {
+                        // Override: set full audio session category.
+                        // `.playback` routes to Bluetooth (A2DP) on its own; the
+                        // .allowBluetooth* options are only valid with
+                        // `.playAndRecord`, and passing them here fails.
+                        try session.setCategory(.playback, mode: .default, options: [])
+                        try session.setActive(true)
+                    } else if session.category == .playAndRecord {
                         // Don't override category, but ensure Bluetooth options are set
-                        // This is safe and doesn't conflict with other plugins
-                        let currentCategory = AVAudioSession.sharedInstance().category
-                        let currentMode = AVAudioSession.sharedInstance().mode
-                        var options: AVAudioSession.CategoryOptions = AVAudioSession.sharedInstance().categoryOptions
-
-                        // Add Bluetooth options if not already present
-                        options.insert(.allowBluetooth)
-                        options.insert(.allowBluetoothA2DP)
-
-                        try AVAudioSession.sharedInstance().setCategory(currentCategory, mode: currentMode, options: options)
+                        // (`.playAndRecord` would otherwise play to the receiver/HFP only).
+                        var options = session.categoryOptions
+                        let missing: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+                        if !options.isSuperset(of: missing) {
+                            options.formUnion(missing)
+                            try session.setCategory(session.category, mode: session.mode, options: options)
+                        }
                     }
+                    // Any other category (e.g. `.playback`, set by the host app)
+                    // already routes to Bluetooth: leave it untouched.
                 } catch {
                     result(FlutterError(code: Constants.audioWaveforms, message: "Couldn't set audio session.", details: error.localizedDescription))
                     return
